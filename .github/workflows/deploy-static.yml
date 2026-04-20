@@ -1,4 +1,4 @@
-﻿name: Deploy Static Site
+name: Deploy Static Site
 
 on:
   push:
@@ -77,25 +77,27 @@ jobs:
               $SUDO cp "$SITE_AVAIL" "${SITE_AVAIL}.bak_$(date +%F_%H%M%S)" || true
             fi
 
-            $SUDO tee "$SITE_AVAIL" >/dev/null <<NGINX
-            server {
-                listen 80;
-                server_name _;
-
-                root $WEB_ROOT;
-                index index.html;
-
-                location = /index.html {
-                    add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0" always;
-                    add_header Pragma "no-cache" always;
-                    expires -1;
-                }
-
-                location / {
-                    try_files \$uri \$uri/ /index.html;
-                }
-            }
-            NGINX
+            # IMPORTANT:
+            # appleboy/ssh-action 会把 script 按行执行并注入前缀，heredoc/tee 会导致配置文件被写坏。
+            # 所以这里用单条命令写入完整 Nginx 配置，避免多行 heredoc。
+            $SUDO bash -lc "printf '%s\n' \
+            'server {' \
+            '    listen 80;' \
+            '    server_name _;' \
+            '' \
+            \"    root $WEB_ROOT;\" \
+            '    index index.html;' \
+            '' \
+            '    location = /index.html {' \
+            '        add_header Cache-Control \"no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0\" always;' \
+            '        add_header Pragma \"no-cache\" always;' \
+            '        expires -1;' \
+            '    }' \
+            '' \
+            '    location / {' \
+            '        try_files \\$uri \\$uri/ /index.html;' \
+            '    }' \
+            '}' > \"$SITE_AVAIL\""
 
             $SUDO ln -sf "$SITE_AVAIL" "$SITE_ENABLED"
             $SUDO nginx -t
