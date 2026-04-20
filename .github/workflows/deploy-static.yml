@@ -78,26 +78,11 @@ jobs:
             fi
 
             # IMPORTANT:
-            # appleboy/ssh-action 会把 script 按行执行并注入前缀，heredoc/tee 会导致配置文件被写坏。
-            # 所以这里用单条命令写入完整 Nginx 配置，避免多行 heredoc。
-            $SUDO bash -lc "printf '%s\n' \
-            'server {' \
-            '    listen 80;' \
-            '    server_name _;' \
-            '' \
-            \"    root $WEB_ROOT;\" \
-            '    index index.html;' \
-            '' \
-            '    location = /index.html {' \
-            '        add_header Cache-Control \"no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0\" always;' \
-            '        add_header Pragma \"no-cache\" always;' \
-            '        expires -1;' \
-            '    }' \
-            '' \
-            '    location / {' \
-            '        try_files \\$uri \\$uri/ /index.html;' \
-            '    }' \
-            '}' > \"$SITE_AVAIL\""
+            # appleboy/ssh-action 会把 script 按行执行并注入前缀，heredoc/tee/多行 printf 容易把前缀写进配置文件。
+            # 这里用 base64 写入“模板配置”，再用 sed 替换 root 目录，规避 $uri 等变量在 shell 里被展开导致失败。
+            CFG_B64="c2VydmVyIHsKICAgIGxpc3RlbiA4MDsKICAgIHNlcnZlcl9uYW1lIF87CgogICAgcm9vdCBfX1dFQl9ST09UX187CiAgICBpbmRleCBpbmRleC5odG1sOwoKICAgIGxvY2F0aW9uID0gL2luZGV4Lmh0bWwgewogICAgICAgIGFkZF9oZWFkZXIgQ2FjaGUtQ29udHJvbCAibm8tc3RvcmUsIG5vLWNhY2hlLCBtdXN0LXJldmFsaWRhdGUsIHByb3h5LXJldmFsaWRhdGUsIG1heC1hZ2U9MCIgYWx3YXlzOwogICAgICAgIGFkZF9oZWFkZXIgUHJhZ21hICJuby1jYWNoZSIgYWx3YXlzOwogICAgICAgIGV4cGlyZXMgLTE7CiAgICB9CgogICAgbG9jYXRpb24gLyB7CiAgICAgICAgdHJ5X2ZpbGVzICR1cmkgJHVyaS8gL2luZGV4Lmh0bWw7CiAgICB9Cn0="
+            $SUDO sh -lc "echo \"$CFG_B64\" | base64 -d > \"$SITE_AVAIL\""
+            $SUDO sed -i "s#__WEB_ROOT__#${WEB_ROOT}#g" "$SITE_AVAIL"
 
             $SUDO ln -sf "$SITE_AVAIL" "$SITE_ENABLED"
             $SUDO nginx -t
