@@ -1,0 +1,110 @@
+﻿name: Deploy Static Site
+
+on:
+  push:
+    branches: [ main ]
+
+concurrency:
+  group: deploy-static-main
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Pack dist
+        run: tar -czf web-app-dist.tar.gz -C dist .
+
+      - name: Upload dist to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          source: web-app-dist.tar.gz
+          target: /tmp
+
+      - name: Apply on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+
+            IP="${{ secrets.SSH_HOST }}"
+            TAR="/tmp/web-app-dist.tar.gz"
+            WEB_ROOT="${{ secrets.DEPLOY_PATH }}"
+            SITE_AVAIL="${{ secrets.NGINX_SITE }}"
+
+            [ -n "$WEB_ROOT" ] || WEB_ROOT="/var/www/web-app"
+            [ -n "$SITE_AVAIL" ] || SITE_AVAIL="/etc/nginx/sites-available/online-learning"
+            SITE_ENABLED="/etc/nginx/sites-enabled/$(basename "$SITE_AVAIL")"
+
+            SUDO=""
+            if [ "$(id -u)" -ne 0 ]; then SUDO="sudo"; fi
+
+            $SUDO mkdir -p "$WEB_ROOT"
+            if [ -n "$(ls -A "$WEB_ROOT" 2>/dev/null || true)" ]; then
+              $SUDO cp -a "$WEB_ROOT" "${WEB_ROOT}_backup_$(date +%F_%H%M%S)" || true
+            fi
+
+            $SUDO rm -rf "$WEB_ROOT"/*
+            $SUDO tar -xzf "$TAR" -C "$WEB_ROOT"
+
+            if [ -f "$SITE_AVAIL" ]; then
+              $SUDO cp "$SITE_AVAIL" "${SITE_AVAIL}.bak_$(date +%F_%H%M%S)" || true
+            fi
+
+            $SUDO tee "$SITE_AVAIL" >/dev/null <<NGINX
+            server {
+                listen 80;
+                server_name _;
+
+                root $WEB_ROOT;
+                index index.html;
+
+                location = /index.html {
+                    add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0" always;
+                    add_header Pragma "no-cache" always;
+                    expires -1;
+                }
+
+                location / {
+                    try_files \$uri \$uri/ /index.html;
+                }
+            }
+            NGINX
+
+            $SUDO ln -sf "$SITE_AVAIL" "$SITE_ENABLED"
+            $SUDO nginx -t
+            if command -v systemctl >/dev/null 2>&1; then
+              $SUDO systemctl reload nginx
+            else
+              $SUDO service nginx reload
+            fi
+
+            echo "[OK] verify assets"
+            curl -sS http://127.0.0.1/ | grep -nE "/assets/index-|/assets/.*\\.(js|css)" | head -n 5 || true
+            curl -sS http://$IP/ | grep -nE "/assets/index-|/assets/.*\\.(js|css)" | head -n 5 || true
