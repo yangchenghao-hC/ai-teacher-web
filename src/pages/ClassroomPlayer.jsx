@@ -1,54 +1,22 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import DOMPurify from 'dompurify'
 import { getRoom, getNextSpeaker, getAgentReply, DEFAULT_AGENTS } from '../services/maic-service'
 import './ClassroomPlayer.css'
 
-/* ========== Auto-scale hook: shrink content to fit container ========== */
-function useAutoScale(deps = []) {
-  const wrapRef = useRef(null)
-  const cardRef = useRef(null)
-  const [scale, setScale] = useState(1)
-  const readyRef = useRef(false)
-
-  const recalc = useCallback(() => {
-    const wrap = wrapRef.current
-    const card = cardRef.current
-    if (!wrap || !card) return
-    // hide during measurement to prevent flash
-    card.style.visibility = 'hidden'
-    card.style.transform = 'none'
-    const wrapH = wrap.clientHeight
-    const cardH = card.scrollHeight
-    const s = cardH > wrapH ? Math.max(0.55, wrapH / cardH) : 1
-    setScale(s)
-    card.style.transform = s < 1 ? `scale(${s})` : 'none'
-    card.style.visibility = 'visible'
-    if (!readyRef.current) {
-      readyRef.current = true
-      card.style.opacity = '1'
-    }
-  }, [])
-
-  useEffect(() => {
-    readyRef.current = false
-    const card = cardRef.current
-    if (card) card.style.opacity = '0'
-    // use rAF to measure after layout
-    const id = requestAnimationFrame(recalc)
-    const wrap = wrapRef.current
-    if (!wrap) return () => cancelAnimationFrame(id)
-    const ro = new ResizeObserver(recalc)
-    ro.observe(wrap)
-    return () => { cancelAnimationFrame(id); ro.disconnect() }
-  }, deps)
-
-  return { wrapRef, cardRef, scale }
+/* ========== Agent Avatar: render img if avatarUrl exists, else emoji ========== */
+function AgentAvatar({ agent, className }) {
+  if (agent?.avatarUrl) {
+    return <img className={`agent-avatar-img ${className || ''}`} src={agent.avatarUrl} alt={agent.name} />
+  }
+  return <span className={className}>{agent?.avatar || '🤖'}</span>
 }
 
 /* ========== Slide Renderer ========== */
 function SlideRenderer({ scene, index, total }) {
-  const { wrapRef, cardRef } = useAutoScale([scene, index])
+  const [illustError, setIllustError] = useState(false)
+  useEffect(() => { setIllustError(false) }, [scene?.illustrationUrl])
+
   const html = scene.contentHtml
     ? DOMPurify.sanitize(scene.contentHtml, {
         ALLOWED_TAGS: ['ul','ol','li','p','strong','em','blockquote','h4','h5','table','thead','tbody','tr','th','td','br','span','code','pre','hr','sup','sub'],
@@ -57,11 +25,11 @@ function SlideRenderer({ scene, index, total }) {
     : null
 
   const layout = scene.layout || 'content'
-  const hasIllustration = !!scene.illustrationUrl
+  const hasIllustration = !!scene.illustrationUrl && !illustError
 
   return (
-    <div className="slide-scale-wrap" ref={wrapRef}>
-      <div className={`slide-card slide-layout-${layout}`} ref={cardRef}>
+    <div className="slide-scale-wrap">
+      <div className={`slide-card slide-layout-${layout}`}>
         <div className="slide-number">{String(index + 1).padStart(2, '0')}</div>
         <div className="slide-header">
           <h2 className="slide-title">{scene.title}</h2>
@@ -69,7 +37,7 @@ function SlideRenderer({ scene, index, total }) {
         </div>
         <div className={`slide-body${hasIllustration ? ' slide-body-with-illustration' : ''}`}>
           {hasIllustration && (
-            <img className="slide-illustration" src={scene.illustrationUrl} alt={scene.title} loading="lazy" onError={e => { e.target.style.display = 'none' }} />
+            <img className="slide-illustration" src={scene.illustrationUrl} alt={scene.title} loading="lazy" onError={() => setIllustError(true)} />
           )}
           {html ? (
             <div className="slide-html" dangerouslySetInnerHTML={{ __html: html }} />
@@ -98,11 +66,10 @@ function QuizRenderer({ scene, index, total }) {
   const [selected, setSelected] = useState(null)
   const [revealed, setRevealed] = useState(false)
   const correct = scene.correctIndex ?? scene.correct ?? 0
-  const { wrapRef, cardRef } = useAutoScale([scene, index, revealed])
 
   return (
-    <div className="quiz-scale-wrap" ref={wrapRef}>
-      <div className="quiz-card" ref={cardRef}>
+    <div className="quiz-scale-wrap">
+      <div className="quiz-card">
         <div className="slide-number">{String(index + 1).padStart(2, '0')}</div>
         <div className="quiz-header">
         <span className="quiz-badge">❓ 随堂测验</span>
@@ -372,7 +339,7 @@ export default function ClassroomPlayer() {
                 return (
                   <div key={i} className="imm-chat-row imm-chat-agent">
                     <div className="imm-chat-avatar" style={{ borderColor: m.agent?.color, background: (m.agent?.color || '#4F7CFF') + '15' }}>
-                      {m.agent?.avatar || '🤖'}
+                      <AgentAvatar agent={m.agent} />
                     </div>
                     <div className="imm-chat-body">
                       <span className="imm-chat-name" style={{ color: m.agent?.color }}>{m.agent?.name}</span>
@@ -405,7 +372,7 @@ export default function ClassroomPlayer() {
         {scene?.type === 'slide' && scene.narration && showNarration && (
           <div className="imm-narration">
             <div className="imm-narr-agent" style={{ borderColor: agents[0]?.color }}>
-              <span className="imm-narr-avatar">{agents[0]?.avatar || '🧑‍🏫'}</span>
+              <span className="imm-narr-avatar"><AgentAvatar agent={agents[0]} /></span>
               <span className="imm-narr-name" style={{ color: agents[0]?.color }}>{agents[0]?.name || '老师'}</span>
             </div>
             <p className="imm-narr-text">{scene.narration}</p>
@@ -418,7 +385,7 @@ export default function ClassroomPlayer() {
           <div className="imm-agents-row">
             {agents.map(a => (
               <div key={a.id} className="imm-agent-chip" style={{ '--agent-color': a.color }} title={`${a.name} (${a.role})`}>
-                <span className="imm-agent-avatar">{a.avatar}</span>
+                <AgentAvatar agent={a} className="imm-agent-avatar" />
               </div>
             ))}
           </div>

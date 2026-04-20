@@ -113,12 +113,23 @@ export async function generateFullClassroom(topic, options = {}, onProgress) {
   let agents = DEFAULT_AGENTS
 
   // 角色生成 Promise
-  const agentsPromise = generateAgents(topic, difficulty).then(agentsRes => {
+  const agentsPromise = generateAgents(topic, difficulty).then(async agentsRes => {
     console.log('[generateFullClassroom] agentsRes:', JSON.stringify(agentsRes).slice(0, 500))
     if (agentsRes.agents?.length >= 3) {
       agents = agentsRes.agents
       // 角色生成完毕，立即通知 UI 刷新角色显示
       if (onProgress) onProgress({ agents })
+      // 并行生成角色头像
+      try {
+        await Promise.allSettled(agents.map(async (agent) => {
+          const prompt = `高质量人物肖像头像，${agent.name}，${agent.persona ? agent.persona.slice(0, 80) : ''}，简洁干净背景，适合圆形头像裁切，专业插画风格`
+          const url = await generateIllustration(prompt, { width: 256, height: 256 })
+          if (url) agent.avatarUrl = url
+        }))
+        if (onProgress) onProgress({ agents })
+      } catch (e) {
+        console.warn('[generateFullClassroom] 头像生成异常:', e)
+      }
     } else {
       console.warn('[generateFullClassroom] AI 返回角色数量不足 (<3)，使用默认角色。')
     }
